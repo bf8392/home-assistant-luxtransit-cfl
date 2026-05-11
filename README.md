@@ -1,4 +1,4 @@
-# LuxTransit Live for Home Assistant
+# LuxTransit Live (CFL) for Home Assistant
 
 A Home Assistant YAML package for showing real-time public transport departures in Luxembourg (CFL) using the mobiliteit.lu / ATP HAFAS OpenData API.
 
