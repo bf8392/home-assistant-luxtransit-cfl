@@ -1,0 +1,35 @@
+type: entities
+title: 🚆 CFL Route einstellen
+show_header_toggle: false
+entities:
+  - entity: input_button.cfl_haltestellen_laden
+    name: Haltestellen neu laden
+    icon: mdi:database-refresh
+
+  - type: divider
+
+  - entity: input_text.cfl_start_search
+    name: Start suchen
+    icon: mdi:magnify
+
+  - entity: input_select.cfl_start_stop
+    name: Start-Haltestelle
+    icon: mdi:train
+
+  - entity: input_text.cfl_destination_search
+    name: Ziel suchen
+    icon: mdi:magnify
+
+  - entity: input_select.cfl_destination_stop
+    name: Ziel-Haltestelle
+    icon: mdi:map-marker
+
+  - type: divider
+
+  - entity: input_number.cfl_refresh_seconds
+    name: Aktualisierung
+    icon: mdi:timer-refresh
+
+  - entity: input_boolean.cfl_fast_refresh_enabled
+    name: Echtzeit-Updates aktiv
+    icon: mdi:update

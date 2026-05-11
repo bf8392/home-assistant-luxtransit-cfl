@@ -1,0 +1,366 @@
+input_text:
+  cfl_start_search:
+    name: CFL Start suchen
+    icon: mdi:magnify
+    initial: "Bettembourg"
+
+  cfl_destination_search:
+    name: CFL Ziel suchen
+    icon: mdi:magnify
+    initial: "Luxembourg"
+
+
+input_select:
+  cfl_start_stop:
+    name: CFL Start-Haltestelle
+    icon: mdi:train
+    options:
+      - "Bitte zuerst Haltestellen laden | unknown"
+
+  cfl_destination_stop:
+    name: CFL Ziel-Haltestelle
+    icon: mdi:map-marker
+    options:
+      - "Bitte zuerst Haltestellen laden | unknown"
+
+
+input_number:
+  cfl_refresh_seconds:
+    name: CFL Aktualisierung alle Sekunden
+    icon: mdi:timer-refresh
+    min: 30
+    max: 300
+    step: 5
+    mode: slider
+    initial: 60
+
+
+input_boolean:
+  cfl_fast_refresh_enabled:
+    name: CFL schnelle Aktualisierung aktiv
+    icon: mdi:update
+    initial: true
+
+
+input_button:
+  cfl_haltestellen_laden:
+    name: CFL Haltestellen laden
+    icon: mdi:database-refresh
+
+
+recorder:
+  exclude:
+    entities:
+      - sensor.cfl_alle_haltestellen_rohdaten
+
+
+rest:
+  - resource: "https://cdt.hafas.de/opendata/apiserver/location.nearbystops"
+    method: GET
+    scan_interval: 86400
+    timeout: 30
+    params:
+      accessId: !secret mobiliteit_api_key
+      originCoordLong: "6.09528"
+      originCoordLat: "49.77723"
+      maxNo: "5000"
+      r: "100000"
+      type: "SE"
+      format: "json"
+    sensor:
+      - name: "CFL Alle Haltestellen Rohdaten"
+        unique_id: cfl_all_stops_raw
+        icon: mdi:bus-stop
+        value_template: >
+          {% if value_json is defined and value_json.StopLocation is defined %}
+            {{ value_json.StopLocation | count }}
+          {% elif value_json is defined and value_json.stopLocationOrCoordLocation is defined %}
+            {{ value_json.stopLocationOrCoordLocation | count }}
+          {% else %}
+            0
+          {% endif %}
+        json_attributes:
+          - StopLocation
+          - stopLocationOrCoordLocation
+
+  - resource: "https://cdt.hafas.de/opendata/apiserver/departureBoard"
+    method: GET
+    scan_interval: 3600
+    timeout: 15
+    params:
+      accessId: !secret mobiliteit_api_key
+      lang: "de"
+      id: "{{ states('input_select.cfl_start_stop').split('|')[-1] | trim if '|' in states('input_select.cfl_start_stop') else 'unknown' }}"
+      direction: "{{ states('input_select.cfl_destination_stop').split('|')[-1] | trim if '|' in states('input_select.cfl_destination_stop') else 'unknown' }}"
+      format: "json"
+      maxJourneys: "10"
+    sensor:
+      - name: "CFL Abfahrten Rohdaten"
+        unique_id: cfl_departures_raw
+        icon: mdi:train-clock
+        value_template: >
+          {% if value_json is defined and value_json.Departure is defined %}
+            {{ value_json.Departure | count }}
+          {% else %}
+            0
+          {% endif %}
+        json_attributes:
+          - Departure
+
+
+template:
+  - sensor:
+      - name: "CFL Route"
+        unique_id: cfl_route
+        icon: mdi:routes
+        state: >
+          {% set start = states('input_select.cfl_start_stop').split('|')[0] | trim %}
+          {% set ziel = states('input_select.cfl_destination_stop').split('|')[0] | trim %}
+          {{ start }} → {{ ziel }}
+        attributes:
+          start_name: "{{ states('input_select.cfl_start_stop').split('|')[0] | trim }}"
+          start_id: "{{ states('input_select.cfl_start_stop').split('|')[-1] | trim }}"
+          ziel_name: "{{ states('input_select.cfl_destination_stop').split('|')[0] | trim }}"
+          ziel_id: "{{ states('input_select.cfl_destination_stop').split('|')[-1] | trim }}"
+
+      - name: "CFL Nächste Abfahrt"
+        unique_id: cfl_next_departure
+        icon: mdi:clock-start
+        state: >
+          {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+          {% if deps | count > 0 %}
+            {% set d = deps[0] %}
+            {{ d.rtTime if d.rtTime is defined else d.time if d.time is defined else 'unbekannt' }}
+          {% else %}
+            Keine Abfahrt
+          {% endif %}
+        attributes:
+          route: "{{ states('sensor.cfl_route') }}"
+          linie: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {{ deps[0].name if deps | count > 0 and deps[0].name is defined else '' }}
+          richtung: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {{ deps[0].direction if deps | count > 0 and deps[0].direction is defined else '' }}
+          geplante_zeit: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {{ deps[0].time if deps | count > 0 and deps[0].time is defined else '' }}
+          echtzeit: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {{ deps[0].rtTime if deps | count > 0 and deps[0].rtTime is defined else '' }}
+          gleis: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {% if deps | count > 0 %}
+              {{ deps[0].rtTrack if deps[0].rtTrack is defined else deps[0].track if deps[0].track is defined else '' }}
+            {% else %}
+              {{ '' }}
+            {% endif %}
+          verspaetung_minuten: >
+            {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+            {% if deps | count > 0 and deps[0].rtTime is defined and deps[0].time is defined and deps[0].date is defined %}
+              {% set planned = as_timestamp(strptime(deps[0].date ~ ' ' ~ deps[0].time, '%Y-%m-%d %H:%M:%S')) %}
+              {% set rt_date = deps[0].rtDate if deps[0].rtDate is defined else deps[0].date %}
+              {% set realtime = as_timestamp(strptime(rt_date ~ ' ' ~ deps[0].rtTime, '%Y-%m-%d %H:%M:%S')) %}
+              {{ ((realtime - planned) / 60) | round(0) }}
+            {% else %}
+              0
+            {% endif %}
+
+
+automation:
+  - alias: "CFL Haltestellen beim Start laden"
+    id: cfl_load_all_stops_on_start
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - delay: "00:00:20"
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.cfl_alle_haltestellen_rohdaten
+
+  - alias: "CFL Haltestellen manuell laden"
+    id: cfl_load_stops_manually
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: input_button.cfl_haltestellen_laden
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.cfl_alle_haltestellen_rohdaten
+
+  - alias: "CFL Start Dropdown aktualisieren"
+    id: cfl_update_start_dropdown
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_text.cfl_start_search
+          - sensor.cfl_alle_haltestellen_rohdaten
+    conditions:
+      - condition: template
+        value_template: >
+          {{ states('sensor.cfl_alle_haltestellen_rohdaten') | int(0) > 0 }}
+    actions:
+      - variables:
+          search: "{{ states('input_text.cfl_start_search') | lower | trim }}"
+          options: >-
+            {%- if search | length < 2 -%}
+              {{ ['Mindestens 2 Zeichen eingeben | unknown'] }}
+            {%- else -%}
+              {%- set ns = namespace(items=[]) -%}
+              {%- for item in (
+                state_attr('sensor.cfl_alle_haltestellen_rohdaten', 'StopLocation')
+                or state_attr('sensor.cfl_alle_haltestellen_rohdaten', 'stopLocationOrCoordLocation')
+                or []
+              ) -%}
+                {%- set raw = item.StopLocation if item.StopLocation is defined else item -%}
+                {%- set txt = raw | string -%}
+
+                {%- if '@O=' in txt -%}
+                  {%- set name = txt.split('@O=')[1].split('@')[0] -%}
+                {%- else -%}
+                  {%- set name = txt.split('|')[0] -%}
+                {%- endif -%}
+
+                {%- if '@L=' in txt -%}
+                  {%- set stop_id = txt.split('@L=')[1].split('@')[0] -%}
+                {%- else -%}
+                  {%- set stop_id = '' -%}
+                {%- endif -%}
+
+                {%- set option = name ~ ' | ' ~ stop_id -%}
+
+                {%- if stop_id and name and search in (name | lower) and option not in ns.items -%}
+                  {%- set ns.items = ns.items + [option] -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {{ ns.items[:50] if ns.items | count > 0 else ['Keine Treffer | unknown'] }}
+            {%- endif -%}
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.cfl_start_stop
+        data:
+          options: "{{ options }}"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.cfl_start_stop
+        data:
+          option: "{{ options[0] }}"
+
+  - alias: "CFL Ziel Dropdown aktualisieren"
+    id: cfl_update_destination_dropdown
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_text.cfl_destination_search
+          - sensor.cfl_alle_haltestellen_rohdaten
+    conditions:
+      - condition: template
+        value_template: >
+          {{ states('sensor.cfl_alle_haltestellen_rohdaten') | int(0) > 0 }}
+    actions:
+      - variables:
+          search: "{{ states('input_text.cfl_destination_search') | lower | trim }}"
+          options: >-
+            {%- if search | length < 2 -%}
+              {{ ['Mindestens 2 Zeichen eingeben | unknown'] }}
+            {%- else -%}
+              {%- set ns = namespace(items=[]) -%}
+              {%- for item in (
+                state_attr('sensor.cfl_alle_haltestellen_rohdaten', 'StopLocation')
+                or state_attr('sensor.cfl_alle_haltestellen_rohdaten', 'stopLocationOrCoordLocation')
+                or []
+              ) -%}
+                {%- set raw = item.StopLocation if item.StopLocation is defined else item -%}
+                {%- set txt = raw | string -%}
+
+                {%- if '@O=' in txt -%}
+                  {%- set name = txt.split('@O=')[1].split('@')[0] -%}
+                {%- else -%}
+                  {%- set name = txt.split('|')[0] -%}
+                {%- endif -%}
+
+                {%- if '@L=' in txt -%}
+                  {%- set stop_id = txt.split('@L=')[1].split('@')[0] -%}
+                {%- else -%}
+                  {%- set stop_id = '' -%}
+                {%- endif -%}
+
+                {%- set option = name ~ ' | ' ~ stop_id -%}
+
+                {%- if stop_id and name and search in (name | lower) and option not in ns.items -%}
+                  {%- set ns.items = ns.items + [option] -%}
+                {%- endif -%}
+              {%- endfor -%}
+              {{ ns.items[:50] if ns.items | count > 0 else ['Keine Treffer | unknown'] }}
+            {%- endif -%}
+      - action: input_select.set_options
+        target:
+          entity_id: input_select.cfl_destination_stop
+        data:
+          options: "{{ options }}"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.cfl_destination_stop
+        data:
+          option: "{{ options[0] }}"
+
+  - alias: "CFL Abfahrten bei Routenänderung sofort aktualisieren"
+    id: cfl_departures_update_on_route_change
+    mode: restart
+    triggers:
+      - trigger: state
+        entity_id:
+          - input_select.cfl_start_stop
+          - input_select.cfl_destination_stop
+    conditions:
+      - condition: template
+        value_template: >
+          {{ 'unknown' not in states('input_select.cfl_start_stop')
+             and 'unknown' not in states('input_select.cfl_destination_stop')
+             and states('input_select.cfl_start_stop') != states('input_select.cfl_destination_stop') }}
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.cfl_abfahrten_rohdaten
+
+  - alias: "CFL Abfahrten regelmäßig aktualisieren"
+    id: cfl_departures_safe_refresh
+    mode: single
+    triggers:
+      - trigger: time_pattern
+        seconds: "/10"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.cfl_fast_refresh_enabled
+        state: "on"
+      - condition: template
+        value_template: >
+          {% set interval = [states('input_number.cfl_refresh_seconds') | int(60), 30] | max %}
+          {% set last = as_timestamp(states.sensor.cfl_abfahrten_rohdaten.last_updated, 0) %}
+          {% set age = as_timestamp(now()) - last %}
+          {{ age >= interval }}
+      - condition: template
+        value_template: >
+          {{ 'unknown' not in states('input_select.cfl_start_stop')
+             and 'unknown' not in states('input_select.cfl_destination_stop')
+             and states('input_select.cfl_start_stop') != states('input_select.cfl_destination_stop') }}
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.cfl_abfahrten_rohdaten
+
+  - alias: "CFL Haltestellen täglich neu laden"
+    id: cfl_reload_all_stops_daily
+    mode: single
+    triggers:
+      - trigger: time
+        at: "04:30:00"
+    actions:
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.cfl_alle_haltestellen_rohdaten

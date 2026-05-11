@@ -1,0 +1,66 @@
+type: markdown
+content: >
+  {% set deps = state_attr('sensor.cfl_abfahrten_rohdaten', 'Departure') or [] %}
+  {% set start = states('input_select.cfl_start_stop').split('|')[0] | trim %}
+  {% set ziel = states('input_select.cfl_destination_stop').split('|')[0] | trim %}
+  {% set next_time = states('sensor.cfl_nachste_abfahrt') %}
+  {% set delay = state_attr('sensor.cfl_nachste_abfahrt', 'verspaetung_minuten') | int(0) %}
+  {% set line = state_attr('sensor.cfl_nachste_abfahrt', 'linie') %}
+  {% set direction = state_attr('sensor.cfl_nachste_abfahrt', 'richtung') %}
+  {% set track = state_attr('sensor.cfl_nachste_abfahrt', 'gleis') %}
+
+  # 🚆 CFL Live Departures
+
+  ## {{ start }} → {{ ziel }}
+
+  {% if deps | count > 0 %}
+
+  <ha-alert alert-type="{% if delay > 0 %}warning{% else %}success{% endif %}">
+  Next departure: <b>{{ next_time }}</b>
+  {% if delay > 0 %}
+  · {{ delay }} min late
+  {% else %}
+  · on time
+  {% endif %}
+  </ha-alert>
+
+  **Line:** {{ line if line else '–' }}  
+  **Direction:** {{ direction if direction else '–' }}  
+  **Platform/Track:** {{ track if track else '–' }}  
+  **Refresh:** every {{ states('input_number.cfl_refresh_seconds') | int }} seconds  
+  **Last update:** {{ as_timestamp(states.sensor.cfl_abfahrten_rohdaten.last_updated) | timestamp_custom('%H:%M:%S') }}
+
+  ---
+
+  ## Upcoming departures
+
+  {% for d in deps[:6] %}
+  {% set realtime = d.rtTime if d.rtTime is defined else d.time if d.time is defined else '?' %}
+  {% set planned = d.time if d.time is defined else '' %}
+  {% set dep_line = d.name if d.name is defined else 'Unknown line' %}
+  {% set dep_direction = d.direction if d.direction is defined else 'Unknown direction' %}
+  {% set dep_track = d.rtTrack if d.rtTrack is defined else d.track if d.track is defined else '' %}
+
+  **{{ realtime }}** · **{{ dep_line }}**  
+  → {{ dep_direction }}
+  {%- if dep_track %}
+  · Track {{ dep_track }}
+  {%- endif %}
+  {%- if planned and realtime != planned %}
+  · Scheduled {{ planned }}
+  {%- endif %}
+
+  {% endfor %}
+
+  {% else %}
+
+  <ha-alert alert-type="info">
+  No departures found.
+  </ha-alert>
+
+  **Route:** {{ start }} → {{ ziel }}  
+  **Last query:** {{ as_timestamp(states.sensor.cfl_abfahrten_rohdaten.last_updated) | timestamp_custom('%H:%M:%S') }}
+
+  Check that start and destination stops are selected correctly.
+
+  {% endif %}
