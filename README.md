@@ -427,5 +427,3 @@ This repository contains Home Assistant YAML configuration examples.
 This project is licensed under the MIT License.
 
 This license only applies to the configuration files and documentation in this repository. Transit data is provided by mobiliteit.lu / ATP / CFL and is subject to their own terms and API access rules.
-
-The public transport data itself is provided by mobiliteit.lu / ATP and is not part of this repository.
